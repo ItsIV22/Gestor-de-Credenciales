@@ -9,8 +9,6 @@
 #include <conio.h>
 #include <windows.h>  // Para SetConsoleOutputCP
 
-//Quiero generar un menu que me permita enviar por parametro, una lista de opciones y un titulo, este menu debe funcionar por flechas y al presionar enter entrar a la opcion seleccionada
-
 class Menu {
     private:
         std::vector<std::string> opciones;
@@ -455,7 +453,7 @@ public:
                 "Almacenar credenciales",
                 "Ver contraseñas guardadas",
                 "Eliminar credenciales",
-                "Salir"
+                "Salir y encriptar base de datos"
             };
             Menu menu(opciones, "=== Gestor de Contraseñas ===");
             int choice = menu.seleccionar();
