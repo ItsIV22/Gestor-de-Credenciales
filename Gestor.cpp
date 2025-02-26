@@ -170,6 +170,9 @@ private:
         file << encrypted;
         file.close();
         
+        // Almacenar la contraseña maestra en la variable miembro
+        master_password = new_master_password;
+        
         // Hacer el archivo oculto
         SetFileAttributesA(MASTER_FILE.c_str(), FILE_ATTRIBUTE_HIDDEN);
         
@@ -345,10 +348,29 @@ private:
 
 public:
     PasswordManager() {
-        // Si existe el archivo encriptado, lo desencriptamos
+        // Verificar si el archivo master existe primero
+        std::ifstream file(MASTER_FILE, std::ios::binary);
+        bool first_time = !file.good();
+        file.close();
+
+        if (first_time) {
+            std::cout << "Primera vez: Configuración de contraseña maestra" << std::endl;
+            setupMasterPassword();
+        } else if (!verifyMasterPassword()) {
+            exit(1);  // Salir si la contraseña es incorrecta
+        }
+
+        // Verificar si existe el archivo encriptado
         if (std::ifstream(DB_FILE_ENC)) {
-            decryptFile(DB_FILE_ENC, DB_FILE);
-            remove(DB_FILE_ENC.c_str());
+            try {
+                // Intentar desencriptar directamente ya que tenemos la contraseña maestra
+                decryptFile(DB_FILE_ENC, DB_FILE);
+                remove(DB_FILE_ENC.c_str());
+            } catch (const std::exception& e) {
+                std::cerr << "Error al desencriptar la base de datos: " << e.what() << std::endl;
+                system("pause");
+                exit(1);
+            }
         }
 
         int rc = sqlite3_open(DB_FILE.c_str(), &db);
@@ -435,18 +457,6 @@ public:
     }
 
     void showMenu() {
-        // Verificar si el archivo master existe primero
-        std::ifstream file(MASTER_FILE, std::ios::binary);
-        bool first_time = !file.good();
-        file.close();
-
-        if (first_time) {
-            std::cout << "Primera vez: Configuración de contraseña maestra" << std::endl;
-            setupMasterPassword();
-        } else if (!verifyMasterPassword()) {
-            return;
-        }
-
         while (true) {
             std::vector<std::string> opciones = {
                 "Generar nueva contraseña",
@@ -509,13 +519,21 @@ public:
     }
 
     ~PasswordManager() {
-        sqlite3_close(db);
+        if (db) {
+            sqlite3_close(db);
+            db = nullptr;
+        }
         
-        // Encriptar la base de datos antes de cerrar
-        if (std::ifstream(DB_FILE)) {
-            encryptFile(DB_FILE, DB_FILE_ENC);
-            remove(DB_FILE.c_str());
-            SetFileAttributesA(DB_FILE_ENC.c_str(), FILE_ATTRIBUTE_HIDDEN);
+        // Solo encriptar si la base de datos existe y tenemos la contraseña maestra
+        if (!master_password.empty() && std::ifstream(DB_FILE)) {
+            try {
+                encryptFile(DB_FILE, DB_FILE_ENC);
+                remove(DB_FILE.c_str());
+                SetFileAttributesA(DB_FILE_ENC.c_str(), FILE_ATTRIBUTE_HIDDEN);
+            } catch (const std::exception& e) {
+                std::cerr << "Error al encriptar la base de datos: " << e.what() << std::endl;
+                system("pause");
+            }
         }
     }
 };
