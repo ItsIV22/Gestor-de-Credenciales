@@ -8,7 +8,16 @@
 #include <openssl/aes.h>
 #include <conio.h>
 #include <windows.h>  // Para SetConsoleOutputCP
+#include <algorithm>  // Para std::transform
+#include "Api.cpp"
 
+/**
+ * @class Menu
+ * @brief Implementa un menú interactivo con selección mediante flechas
+ * 
+ * Permite crear menús navegables usando las flechas del teclado y Enter para seleccionar.
+ * Soporta la tecla ESC para cancelar la selección.
+ */
 class Menu {
     private:
         std::vector<std::string> opciones;
@@ -59,6 +68,17 @@ int Menu::seleccionar() {
     }
 }
 
+/**
+ * @class PasswordManager
+ * @brief Gestor de contraseñas con encriptación y almacenamiento seguro
+ * 
+ * Características principales:
+ * - Encriptación AES-256 para contraseñas
+ * - Almacenamiento en SQLite con base de datos encriptada
+ * - Verificación de contraseñas filtradas mediante API de HIBP
+ * - Generación de contraseñas seguras
+ * - Gestión de contraseña maestra
+ */
 class PasswordManager {
 private:
     std::string master_password;
@@ -67,7 +87,12 @@ private:
     const std::string DB_FILE = "passwords.db";
     const std::string DB_FILE_ENC = "passwords.db.enc";
     
-    // Función para encriptar texto
+    /**
+     * @brief Encripta texto usando AES-256-CBC
+     * @param text Texto a encriptar
+     * @param key Clave de encriptación
+     * @return Texto encriptado
+     */
     std::string encrypt(const std::string& text, const std::string& key) {
         std::string encrypted;
         EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
@@ -120,6 +145,10 @@ private:
         return std::string(plain_data.begin(), plain_data.begin() + plain_len);
     }
 
+    /**
+     * @brief Verifica la contraseña maestra contra el archivo almacenado
+     * @return true si la contraseña es correcta, false en caso contrario
+     */
     bool checkMasterPassword() {
         std::ifstream file(MASTER_FILE, std::ios::binary);
         if (!file) return false;
@@ -215,10 +244,13 @@ private:
         }
     }
 
+    /**
+     * @brief Estructura para almacenar credenciales
+     */
     struct Credential {
-        int id;
-        std::string service;
-        std::string username;
+        int id;              ///< ID único en la base de datos
+        std::string service; ///< Nombre del servicio
+        std::string username; ///< Nombre de usuario
     };
 
     std::vector<Credential> getStoredCredentials() {
@@ -346,6 +378,80 @@ private:
         outFile.close();
     }
 
+    void checkPasswordBreaches(int id) {
+        const char* sql = "SELECT service_name, username, encrypted_password FROM passwords WHERE id = ?;";
+        sqlite3_stmt* stmt;
+        
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
+            sqlite3_bind_int(stmt, 1, id);
+            
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                std::string service = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                std::string username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                std::string encrypted_password = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+                
+                // Desencriptar la contraseña
+                std::string password = decrypt(encrypted_password, master_password);
+                
+                // Generar el hash SHA-1 y convertirlo a mayúsculas
+                std::string hash = sha1(password);
+                std::transform(hash.begin(), hash.end(), hash.begin(), ::toupper);
+                
+                // Verificar el hash con la API
+                int breachCount = checkPassword(hash);
+                if (breachCount > 0) {
+                    std::cout << "\nALERTA: La contraseña para " << service << " (usuario: " << username << ") "
+                              << "ha aparecido en " << breachCount << " filtraciones de datos." << std::endl;
+                    std::cout << "Se recomienda cambiar esta contraseña inmediatamente." << std::endl;
+                } else if (breachCount == 0) {
+                    std::cout << "\nLa contraseña para " << service << " (usuario: " << username << ") "
+                              << "no se ha encontrado en ninguna filtración conocida." << std::endl;
+                } else {
+                    std::cout << "\nError al verificar la contraseña. Por favor, intente más tarde." << std::endl;
+                }
+            }
+        }
+        sqlite3_finalize(stmt);
+        system("pause");
+    }
+
+    void checkAllPasswords() {
+        std::cout << "\nVerificando todas las contraseñas almacenadas..." << std::endl;
+        const char* sql = "SELECT id, service_name, username, encrypted_password FROM passwords;";
+        sqlite3_stmt* stmt;
+        bool foundBreaches = false;
+        
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                int id = sqlite3_column_int(stmt, 0);
+                std::string service = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                std::string username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+                std::string encrypted_password = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+                
+                // Desencriptar la contraseña
+                std::string password = decrypt(encrypted_password, master_password);
+                
+                // Generar el hash SHA-1 y convertirlo a mayúsculas
+                std::string hash = sha1(password);
+                std::transform(hash.begin(), hash.end(), hash.begin(), ::toupper);
+                
+                // Verificar el hash con la API
+                int breachCount = checkPassword(hash);
+                if (breachCount > 0) {
+                    foundBreaches = true;
+                    std::cout << "\nALERTA: La contraseña para " << service << " (usuario: " << username << ") "
+                              << "ha aparecido en " << breachCount << " filtraciones de datos." << std::endl;
+                }
+            }
+            
+            if (!foundBreaches) {
+                std::cout << "\nNinguna de las contraseñas almacenadas se ha encontrado en filtraciones conocidas." << std::endl;
+            }
+        }
+        sqlite3_finalize(stmt);
+        system("pause");
+    }
+
 public:
     PasswordManager() {
         // Verificar si el archivo master existe primero
@@ -463,6 +569,8 @@ public:
                 "Almacenar credenciales",
                 "Ver contraseñas guardadas",
                 "Eliminar credenciales",
+                "Verificar contraseña específica",
+                "Verificar todas las contraseñas",
                 "Salir y encriptar base de datos"
             };
             Menu menu(opciones, "=== Gestor de Contraseñas ===");
@@ -512,7 +620,32 @@ public:
                 case 3:
                     deleteCredentials();
                     break;
-                case 4:
+                case 4: {
+                    std::vector<Credential> credentials = getStoredCredentials();
+                    if (credentials.empty()) {
+                        std::cout << "No hay credenciales almacenadas." << std::endl;
+                        system("pause");
+                        break;
+                    }
+
+                    std::vector<std::string> menuOptions;
+                    for (const auto& cred : credentials) {
+                        menuOptions.push_back(cred.service + " - " + cred.username);
+                    }
+                    menuOptions.push_back("Cancelar");
+
+                    Menu menu(menuOptions, "Seleccione las credenciales a verificar:");
+                    int subChoice = menu.seleccionar();
+
+                    if (subChoice != menuOptions.size() - 1) {  // Si no seleccionó "Cancelar"
+                        checkPasswordBreaches(credentials[subChoice].id);
+                    }
+                    break;
+                }
+                case 5:
+                    checkAllPasswords();
+                    break;
+                case 6:
                     return;
             }
         }
